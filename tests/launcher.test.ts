@@ -139,4 +139,99 @@ describe("npx launcher (bin/handproof.js)", () => {
       repo.cleanup();
     }
   });
+
+  // Signal the launcher while `bun` on PATH is a #!/bin/sh wrapper that calls
+  // the real Bun without exec (like a pnpm global shim): the direct child is
+  // the wrapper, the real server its child, so the signal must reach the
+  // whole process group or the server is left running (issue #11).
+  async function signalStopsWrappedServer(signal: "SIGTERM" | "SIGINT" | "SIGHUP") {
+    const repo = tmpRepo();
+    const fifoDir = tmpDir("handproof-fifo-");
+    const wrapDir = tmpDir("handproof-wrapbun-");
+    let wrapperPid: number | undefined;
+    let serverPid: number | undefined;
+    let stdinFd: number | undefined;
+    try {
+      initRepoHandoffs(repo);
+      fs.writeFileSync(path.join(wrapDir, "bun"), `#!/bin/sh\n"${process.execPath}" "$@"\n`, {
+        mode: 0o755,
+      });
+      const fifo = path.join(fifoDir, "stdin");
+      if (Bun.spawnSync(["mkfifo", fifo]).exitCode !== 0) throw new Error("mkfifo failed");
+      stdinFd = fs.openSync(fifo, fs.constants.O_RDWR);
+      const launcher = Bun.spawn([NODE ?? "node", LAUNCHER, "serve"], {
+        cwd: PROJECT_ROOT,
+        env: testEnv({
+          HANDPROOF_REPO: repo.dir,
+          HANDPROOF_AGENT: AGENTS.cursorImpl.name,
+          PATH: `${wrapDir}:${process.env.PATH ?? ""}`,
+        }),
+        stdin: stdinFd,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // The wrapper is the launcher's direct child; the real server is the wrapper's child.
+      for (let i = 0; i < 100 && serverPid === undefined; i++) {
+        const childOut = Bun.spawnSync(["pgrep", "-P", String(launcher.pid)])
+          .stdout.toString()
+          .trim();
+        if (childOut !== "") {
+          wrapperPid = Number(childOut.split("\n")[0]);
+          const grandOut = Bun.spawnSync(["pgrep", "-P", String(wrapperPid)])
+            .stdout.toString()
+            .trim();
+          if (grandOut !== "") serverPid = Number(grandOut.split("\n")[0]);
+        }
+        if (serverPid === undefined) await Bun.sleep(20);
+      }
+      if (serverPid === undefined) throw new Error("launcher never started the server");
+
+      launcher.kill(signal);
+      await launcher.exited;
+      expect(launcher.signalCode).toBe(signal);
+      expect(await processGone(serverPid)).toBe(true);
+      expect(await processGone(wrapperPid as number)).toBe(true);
+    } finally {
+      // If the signal wasn't forwarded, don't leave an orphaned server behind.
+      if (serverPid !== undefined) {
+        try {
+          process.kill(serverPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      if (wrapperPid !== undefined) {
+        try {
+          process.kill(wrapperPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      if (stdinFd !== undefined) fs.closeSync(stdinFd);
+      removeDir(fifoDir);
+      removeDir(wrapDir);
+      repo.cleanup();
+    }
+  }
+
+  test.skipIf(NODE === null)(
+    "under Node, SIGTERM to the launcher stops the server when bun on PATH is a shell wrapper",
+    async () => {
+      await signalStopsWrappedServer("SIGTERM");
+    },
+  );
+
+  test.skipIf(NODE === null)(
+    "under Node, SIGINT to the launcher stops the server when bun on PATH is a shell wrapper",
+    async () => {
+      await signalStopsWrappedServer("SIGINT");
+    },
+  );
+
+  test.skipIf(NODE === null)(
+    "under Node, SIGHUP to the launcher stops the server when bun on PATH is a shell wrapper",
+    async () => {
+      await signalStopsWrappedServer("SIGHUP");
+    },
+  );
 });

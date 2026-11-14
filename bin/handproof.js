@@ -7,11 +7,31 @@ import { fileURLToPath } from "node:url";
 const server = fileURLToPath(new URL("../dist/bin.js", import.meta.url));
 const bun = process.versions.bun ? process.execPath : "bun";
 
-const child = spawn(bun, [server, ...process.argv.slice(2)], { stdio: "inherit" });
+const child = spawn(bun, [server, ...process.argv.slice(2)], {
+  stdio: "inherit",
+  // Its own process group, so a forwarded signal reaches the real server even
+  // when `bun` on PATH is a shell wrapper (for example the shim a pnpm global
+  // install creates): the wrapper is the direct child and the server runs as
+  // its child in the same group, so killing the direct child alone would
+  // leave the server running. Windows has no process groups, so there the
+  // direct child is killed as before.
+  detached: process.platform !== "win32",
+});
 
 const forwarded = ["SIGINT", "SIGTERM", "SIGHUP"];
 for (const signal of forwarded) {
-  process.on(signal, () => child.kill(signal));
+  process.on(signal, () => {
+    if (child.pid !== undefined && process.platform !== "win32") {
+      try {
+        // A negative pid kills the child's whole process group.
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // The child (or its group) is already gone: fall through to the direct kill.
+      }
+    }
+    child.kill(signal);
+  });
 }
 
 child.on("error", (err) => {
