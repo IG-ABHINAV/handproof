@@ -30,7 +30,7 @@ const PATTERNS: readonly { pattern: SecretPattern; re: RegExp }[] = [
     pattern: "github_oauth",
     re: /(?<![A-Za-z0-9_])(?:gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}(?![A-Za-z0-9])/,
   },
-  { pattern: "slack_token", re: /\bxox[bpras]-[0-9A-Za-z-]{10,}/ },
+  { pattern: "slack_token", re: /\bxox[baprs]-[0-9]{8,}-[0-9A-Za-z-]{8,}/ },
   { pattern: "google_api_key", re: /(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])/ },
   {
     pattern: "stripe_live_key",

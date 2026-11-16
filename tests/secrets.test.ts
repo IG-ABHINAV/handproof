@@ -71,13 +71,16 @@ describe("scanSecrets", () => {
       { path: "note", pattern: "slack_token" },
     ]);
     for (const prefix of ["xoxp", "xoxa", "xoxr", "xoxs"]) {
-      expect(scanSecrets(`${prefix}-${"d".repeat(10)}`, ["note"])).toEqual([
+      expect(scanSecrets(`${prefix}-${"1".repeat(10)}-${"d".repeat(10)}`, ["note"])).toEqual([
         { path: "note", pattern: "slack_token" },
       ]);
     }
     expect(scanSecrets("xoxb-", ["note"])).toEqual([]);
     expect(scanSecrets("xoxb-short", ["note"])).toEqual([]);
     expect(scanSecrets("my xoxo token", ["note"])).toEqual([]);
+    expect(scanSecrets("xoxs-and-hugs-to-everyone", ["note"])).toEqual([]);
+    expect(scanSecrets(`xoxb-${"-".repeat(12)}`, ["note"])).toEqual([]);
+    expect(scanSecrets(`xoxb-${"1".repeat(7)}-${"a".repeat(10)}`, ["note"])).toEqual([]);
   });
 
   test("google api keys", () => {
